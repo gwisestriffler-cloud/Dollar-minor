@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deriv Digit Bot</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#172033;background:#f4f7fb}
+body{margin:0;padding:16px;max-width:980px;margin-inline:auto}
+h1{margin:0 0 4px;font-size:1.55rem} .sub{color:#536176;margin:0 0 18px}
+.card{background:#fff;border:1px solid #dce3ee;border-radius:14px;padding:15px;margin:12px 0;box-shadow:0 2px 8px #18243a0a}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
+label{display:block;font-size:.88rem;font-weight:650;margin-bottom:5px}
+input,select,button{font:inherit} input,select{width:100%;box-sizing:border-box;border:1px solid #c7d1e0;border-radius:9px;padding:10px;background:white}
+button{border:0;border-radius:10px;padding:11px 14px;font-weight:750;cursor:pointer}
+.primary{background:#1769e0;color:white}.danger{background:#b42318;color:white}.secondary{background:#e8eef7;color:#172033}
+.row{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}.status{padding:10px;border-radius:9px;background:#eef3fa;font-weight:650;overflow-wrap:anywhere}
+.warning{background:#fff5df;border:1px solid #f1d18a;color:#674b09;padding:12px;border-radius:10px;line-height:1.45}
+.small{font-size:.83rem;color:#58677c;line-height:1.45}
+table{border-collapse:collapse;width:100%;font-size:.88rem}th,td{text-align:left;padding:8px;border-bottom:1px solid #e5eaf2}th{color:#526176}
+#log{max-height:240px;overflow:auto;font: .8rem ui-monospace,monospace;white-space:pre-wrap}
+.pill{display:inline-block;background:#e8eef7;border-radius:999px;padding:3px 8px;margin:2px;font-size:.8rem}
+</style>
+</head>
+<body>
+<h1>Deriv Digit Bot</h1>
+<p class="sub">OVER 1 / UNDER 8 • digit-percentage filter • Martingale • mobile-friendly</p>
+<div class="warning"><b>Demo first.</b> This is an experimental client-side bot, not a profit guarantee. Martingale can rapidly increase losses. No daily loss limit is included as requested, so the bot can continue trading until you stop it or your balance cannot support a stake. Use a demo account first. Never share your Deriv password or API token with anyone.</div>
+
+<div class="card">
+<h2>1. Connection</h2>
+<div class="grid">
+<div><label for="appId">Deriv App ID</label><input id="appId" value="1089" inputmode="numeric"></div>
+<div><label for="token">API token (local only)</label><input id="token" type="password" autocomplete="off" placeholder="Paste token with trade permission"></div>
+<div><label for="accountMode">Account mode</label><select id="accountMode"><option value="demo">Demo / virtual account</option><option value="real">Real account (risky)</option></select></div>
+</div>
+<p class="small">The token is kept only in this page's memory and is not saved. Use a token with the minimum permissions needed; for initial testing, use a demo account.</p>
+<div class="row"><button class="primary" id="connectBtn">Connect</button><button class="secondary" id="disconnectBtn">Disconnect</button></div>
+<div class="status" id="connectionStatus">Not connected</div>
+</div>
+
+<div class="card">
+<h2>2. Trading settings</h2>
+<div class="grid">
+<div><label for="stake">Starting stake (account currency)</label><input id="stake" type="number" min="0.35" step="0.01" value="1"></div>
+<div><label for="multiplier">Martingale multiplier</label><input id="multiplier" type="number" min="1" step="0.1" value="2"></div>
+<div><label for="maxSteps">Maximum consecutive Martingale increases</label><input id="maxSteps" type="number" min="0" step="1" value="5"></div>
+<div><label for="duration">Contract duration (ticks)</label><input id="duration" type="number" min="1" step="1" value="1"></div>
+<div><label for="window">Digit percentage sample (ticks)</label><input id="window" type="number" min="20" step="1" value="100"></div>
+<div><label for="threshold">Each target digit must be above (%)</label><input id="threshold" type="number" min="0" max="100" step="0.1" value="10"></div>
+<div><label for="takeProfit">Session take profit (account currency)</label><input id="takeProfit" type="number" min="0" step="0.01" value="10"></div>
+<div><label for="stopLoss">Session stop loss (account currency)</label><input id="stopLoss" type="number" min="0" step="0.01" value="10"></div>
+</div>
+<p class="small">Take profit and stop loss are session-level net P/L thresholds. Set either value to 0 to disable that threshold. When a threshold is reached, the bot stops opening new trades; any open contract still settles normally. Martingale example: $1 stake × 2 after a loss = $2, then $4. “Maximum increases” limits the sequence length.</p>
+<div class="row"><button class="primary" id="startBtn" disabled>Start automatic trading</button><button class="danger" id="stopBtn" disabled>STOP BOT</button></div>
+<div class="status" id="botStatus">Bot stopped</div>
+</div>
+
+<div class="card">
+<h2>3. Market monitor</h2>
+<p class="small">The bot discovers available Volatility Index symbols from Deriv and subscribes to their ticks. A symbol is traded only when its digit history and percentage conditions match. It allows one contract at a time to reduce overlapping trades.</p>
+<div id="marketCount">No markets loaded</div>
+<div style="overflow-x:auto"><table><thead><tr><th>Market</th><th>Last digit</th><th>0%</th><th>1%</th><th>8%</th><th>9%</th><th>Signal</th></tr></thead><tbody id="marketRows"></tbody></table></div>
+</div>
+
+<div class="card">
+<h2>4. Trade history / log</h2>
+<div class="grid">
+<div><label>Current stake</label><div class="status" id="currentStake">—</div></div>
+<div><label>Martingale step</label><div class="status" id="stepStatus">0</div></div>
+<div><label>Session net profit/loss</label><div class="status" id="pnl">0.00</div></div>
+<div><label>Contracts completed</label><div class="status" id="tradeCount">0</div></div>
+</div>
+<div id="log">Ready. Connect using a demo account to begin.</div>
+</div>
+
+<script>
+(() => {
+ const $ = id => document.getElementById(id);
+ let ws=null, connected=false, running=false, authorized=false, reqSeq=1;
+ let pending=new Map(), symbols=new Map(), subscriptions=new Map();
+ let activeContract=false, activeContractId=null, activeContractSymbol=null;
+ let stakeNow=1, martingaleStep=0, sessionPL=0, completed=0;
+ const logEl=$('log');
+ function log(msg){const t=new Date().toLocaleTimeString();logEl.textContent=`[${t}] ${msg}\n`+logEl.textContent;}
+ function status(id,msg){$(id).textContent=msg;}
+ function send(payload){if(!ws||ws.readyState!==WebSocket.OPEN)throw new Error('WebSocket is not connected');const req_id=reqSeq++;payload.req_id=req_id;ws.send(JSON.stringify(payload));return req_id;}
+ function request(payload, timeout=12000){return new Promise((resolve,reject)=>{let id;try{id=send(payload)}catch(e){reject(e);return}const timer=setTimeout(()=>{pending.delete(id);reject(new Error('Deriv request timed out'))},timeout);pending.set(id,{resolve,reject,timer});});}
+ function num(id, fallback){const n=Number($(id).value);return Number.isFinite(n)?n:fallback;}
+ function money(n){return Number(n).toFixed(2);}
+ function render(){
+   const body=$('marketRows'); body.innerHTML='';
+   for(const [symbol,m] of symbols){
+     const hist=m.digits; const counts=Array(10).fill(0);hist.forEach(d=>counts[d]++);
+     const pct=counts.map(c=>hist.length?100*c/hist.length:0);
+     let signal='—';
+     if(hist.length>=Math.max(3,num('window',100))){
+       const last3=hist.slice(-3);
+       if(pct[0]>num('threshold',10)&&pct[1]>num('threshold',10)&&last3.every(d=>d>1))signal='OVER 1';
+       if(pct[8]>num('threshold',10)&&pct[9]>num('threshold',10)&&last3.every(d=>d<8))signal=signal==='OVER 1'?'OVER 1 / UNDER 8':'UNDER 8';
+     }
+     const tr=document.createElement('tr');
+     [m.name||symbol,hist.length?hist[hist.length-1]:'—',pct[0].toFixed(1)+'%',pct[1].toFixed(1)+'%',pct[8].toFixed(1)+'%',pct[9].toFixed(1)+'%',signal].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});
+     body.appendChild(tr);
+   }
+   $('marketCount').textContent=`${symbols.size} volatility markets monitored`;
+   status('currentStake',money(stakeNow));status('stepStatus',String(martingaleStep));status('pnl',money(sessionPL));status('tradeCount',String(completed));
+ }
+ function digitFromTick(tick,m){
+   const q=String(tick.quote);
+   let decimals=Number.isInteger(tick.pip_size)?Math.round(-Math.log10(tick.pip_size)):null;
+   let formatted;
+   if(decimals!==null && decimals>=0 && decimals<=10) formatted=Number(tick.quote).toFixed(decimals);
+   else formatted=q;
+   const digits=formatted.replace(/\D/g,'');
+   return digits.length?Number(digits[digits.length-1]):null;
+ }
+ async function authorize(){
+   const token=$('token').value.trim(); if(!token)throw new Error('Paste your Deriv API token into the token field.');
+   const appId=$('appId').value.trim(); if(!/^\d+$/.test(appId))throw new Error('App ID must be numeric.');
+   ws=new WebSocket(`wss://ws.derivws.com/websockets/v3?app_id=${encodeURIComponent(appId)}`);
+   ws.onmessage=onMessage;
+   ws.onerror=()=>{status('connectionStatus','Connection error. Check internet and App ID.');};
+   ws.onclose=()=>{connected=false;authorized=false;running=false;activeContract=false;status('connectionStatus','Disconnected');status('botStatus','Bot stopped');$('startBtn').disabled=true;$('stopBtn').disabled=true;log('Connection closed.');};
+   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Could not connect to Deriv.')),12000);ws.addEventListener('open',()=>{clearTimeout(timer);resolve()},{once:true});ws.addEventListener('error',()=>{clearTimeout(timer);reject(new Error('WebSocket connection failed.'))},{once:true});});
+   connected=true;status('connectionStatus','Connected; authorizing…');
+   const auth=await request({authorize:token});
+   authorized=true;const account=auth.authorize||{};
+   status('connectionStatus',`Authorized: ${account.loginid||'account'} • ${account.currency||''} • ${account.is_virtual?'DEMO':'REAL'}`);
+   if($('accountMode').value==='demo'&&!account.is_virtual){throw new Error('You selected Demo mode, but the token authorized a REAL account. Disconnect and use a demo token.');}
+   if($('accountMode').value==='real'&&account.is_virtual){throw new Error('You selected Real mode, but the token authorized a DEMO account.');}
+   $('startBtn').disabled=false;
+   request({active_symbols:'brief', product_type:'basic'}).then(r=>{
+     const arr=r.active_symbols||[];
+     const selected=arr.filter(s=>/volatility/i.test((s.display_name||'')+' '+(s.market_display_name||'')) && /^(R_|1HZ|1HZ|JD|RDBULL|RDBEAR)/i.test(s.symbol||''));
+     if(!selected.length){log('Could not identify volatility symbols from active_symbols.');return;}
+     selected.forEach(s=>{
+       if(symbols.has(s.symbol))return;
+       symbols.set(s.symbol,{name:s.display_name||s.symbol,digits:[],pip_size:null,lastQuote:null});
+       const id=send({ticks:s.symbol,subscribe:1});
+       subscriptions.set(id,s.symbol);
+     });
+     render();log(`Loaded ${selected.length} volatility symbols.`);
+   }).catch(e=>log('Symbol loading error: '+e.message));
+ }
+ function onMessage(event){
+   let data;try{data=JSON.parse(event.data)}catch{return}
+   if(data.error){
+     const id=data.req_id;const p=pending.get(id);
+     if(p){clearTimeout(p.timer);pending.delete(id);p.reject(new Error(data.error.message||'Deriv API error'))}
+     else log('API error: '+(data.error.message||'unknown error'));
+     return;
+   }
+   const id=data.req_id; if(id&&pending.has(id)){const p=pending.get(id);clearTimeout(p.timer);pending.delete(id);p.resolve(data)}
+   if(data.msg_type==='tick'&&data.tick)handleTick(data.tick);
+   if(data.msg_type==='proposal'&&data.proposal&&data.echo_req&&data.echo_req.passthrough&&data.echo_req.passthrough.bot_trade)buyProposal(data);
+   if(data.msg_type==='proposal_open_contract'&&data.proposal_open_contract)handleContract(data.proposal_open_contract);
+ }
+ function checkSessionLimits(){
+   const tp=Math.max(0,num('takeProfit',0));
+   const sl=Math.max(0,num('stopLoss',0));
+   if(tp>0&&sessionPL>=tp){
+     running=false;
+     status('botStatus',`TAKE PROFIT reached (${money(sessionPL)}). Bot stopped opening new trades.`);
+     $('startBtn').disabled=!authorized;$('stopBtn').disabled=true;
+     log(`Take-profit threshold reached: ${money(sessionPL)}. New trades stopped.`);
+     return true;
+   }
+   if(sl>0&&sessionPL<=-sl){
+     running=false;
+     status('botStatus',`STOP LOSS reached (${money(sessionPL)}). Bot stopped opening new trades.`);
+     $('startBtn').disabled=!authorized;$('stopBtn').disabled=true;
+     log(`Stop-loss threshold reached: ${money(sessionPL)}. New trades stopped.`);
+     return true;
+   }
+   return false;
+ }
+ function handleTick(tick){
+   const m=symbols.get(tick.symbol);if(!m)return;
+   m.lastQuote=tick.quote;m.pip_size=tick.pip_size;
+   const d=digitFromTick(tick,m);if(d===null)return;
+   m.digits.push(d);const limit=Math.max(20,Math.floor(num('window',100)));if(m.digits.length>limit)m.digits.shift();
+   render();
+   if(!running||activeContract||m.digits.length<limit)return;
+   const hist=m.digits,counts=Array(10).fill(0);hist.forEach(x=>counts[x]++);
+   const pct=counts.map(c=>100*c/hist.length), last3=hist.slice(-3);
+   let contract=null;
+   if(pct[0]>num('threshold',10)&&pct[1]>num('threshold',10)&&last3.every(x=>x>1))contract={type:'DIGITOVER',barrier:'1',label:'OVER 1'};
+   else if(pct[8]>num('threshold',10)&&pct[9]>num('threshold',10)&&last3.every(x=>x<8))contract={type:'DIGITUNDER',barrier:'8',label:'UNDER 8'};
+   if(contract){log(`${m.name}: signal ${contract.label}; digits ${last3.join(',')} — requesting proposal.`);placeTrade(tick.symbol,contract).catch(e=>log('Trade request failed: '+e.message));}
+ }
+ async function placeTrade(symbol,contract){
+   if(activeContract||!running)return;
+   activeContract=true;activeContractSymbol=symbol;
+   try{
+     const currency=(document.querySelector('#connectionStatus').textContent.match(/•\s*([A-Z]{3,5})\s*•/)||[])[1]||'USD';
+     const proposal=await request({proposal:1,amount:stakeNow,basis:'stake',contract_type:contract.type,currency,duration:Math.max(1,Math.floor(num('duration',1))),duration_unit:'t',barrier:contract.barrier,underlying_symbol:symbol,passthrough:{bot_trade:1,label:contract.label,symbol}});
+     if(!proposal.proposal)throw new Error('No price proposal returned.');
+     const buy=await request({buy:proposal.proposal.id,price:Number(proposal.proposal.ask_price)});
+     if(!buy.buy)throw new Error('Buy response missing.');
+     monitorContract(buy.buy);
+     log(`Bought ${contract.label} on ${symbol}; stake ${money(stakeNow)}.`);
+   }catch(e){activeContract=false;activeContractSymbol=null;log('Could not place trade: '+e.message);}
+ }
+ function buyProposal(data){/* reserved for compatibility with proposal subscription messages */}
+ function monitorContract(buy){
+   activeContractId=buy.contract_id;
+   if(!activeContractId){activeContract=false;log('Buy response had no contract ID.');return;}
+   try{send({proposal_open_contract:1,contract_id:activeContractId,subscribe:1});}catch(e){log('Could not monitor contract: '+e.message);}
+ }
+ function handleContract(c){
+   if(!c.is_sold)return;
+   const profit=Number(c.profit||0);sessionPL+=profit;completed++;
+   log(`Contract settled on ${c.underlying||activeContractSymbol||'market'}: ${profit>=0?'WIN':'LOSS'} ${money(profit)}.`);
+   if(profit<0){
+     const maxSteps=Math.max(0,Math.floor(num('maxSteps',5)));
+     if(martingaleStep<maxSteps){martingaleStep++;stakeNow=Number(($('stake').value||1))*Math.pow(Math.max(1,num('multiplier',2)),martingaleStep);}
+     else {martingaleStep=0;stakeNow=num('stake',1);log('Martingale step limit reached; resetting to starting stake.');}
+   }else{martingaleStep=0;stakeNow=num('stake',1);}
+   activeContract=false;activeContractId=null;activeContractSymbol=null;render();
+   checkSessionLimits();
+ }
+ $('connectBtn').addEventListener('click',async()=>{
+   $('connectBtn').disabled=true;
+   try{await authorize();log('Connected and authorized.');}
+   catch(e){status('connectionStatus','Connection failed: '+e.message);log('Connection error: '+e.message);if(ws)try{ws.close()}catch{}}
+   finally{$('connectBtn').disabled=false;}
+ });
+ $('disconnectBtn').addEventListener('click',()=>{running=false;activeContract=false;if(ws)ws.close();ws=null;authorized=false;connected=false;$('startBtn').disabled=true;$('stopBtn').disabled=true;status('connectionStatus','Disconnected');status('botStatus','Bot stopped');log('Disconnected by user.');});
+ $('startBtn').addEventListener('click',()=>{
+   if(!authorized){log('Connect and authorize first.');return}
+   const start=num('stake',0),mult=num('multiplier',0),win=num('window',0);
+   if(start<=0||mult<1||win<20){log('Check stake, multiplier (at least 1), and sample size (at least 20).');return}
+   if(num('takeProfit',0)<0||num('stopLoss',0)<0){log('Take-profit and stop-loss values must be 0 or greater.');return}
+   stakeNow=start;martingaleStep=0;sessionPL=0;completed=0;render();running=true;status('botStatus','BOT RUNNING — automatic trading enabled');$('startBtn').disabled=true;$('stopBtn').disabled=false;log('Bot started. Session P/L reset to 0. Check that the selected account is DEMO before testing.');
+ });
+ $('stopBtn').addEventListener('click',()=>{running=false;status('botStatus','Bot stopped. Any open contract will continue until settlement.');$('startBtn').disabled=!authorized;$('stopBtn').disabled=true;log('STOP pressed. No new trades will be opened; an open contract is not automatically cancelled.');});
+ window.addEventListener('beforeunload',()=>{if(ws)ws.close()});
+ render();
+})();
+</script>
+</body>
+</html>
